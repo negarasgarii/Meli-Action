@@ -1,0 +1,103 @@
+name: دانلودر ویدیو (بدون محدودیت حجم)
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'لینک ویدیو (YouTube, Instagram, Twitter, etc.)'
+        required: true
+        type: string
+      output_format:
+        description: 'نوع خروجی'
+        required: true
+        type: choice
+        options:
+          - mp4 (video)
+          - mp3 (audio only)
+        default: 'mp4 (video)'
+      desired_quality:
+        description: 'کیفیت (best, 1080p, 720p, 480p, 360p, worst)'
+        required: false
+        type: string
+        default: 'best'
+      max_part_mb:
+        description: 'حداکثر حجم هر قسمت بر حسب MB (0 = عدم تقسیم)'
+        required: false
+        type: number
+        default: 90
+
+permissions:
+  contents: write
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install yt-dlp
+        run: |
+          pip install yt-dlp
+
+      - name: Download media
+        id: download
+        run: |
+          URL="${{ github.event.inputs.video_url }}"
+          FORMAT="${{ github.event.inputs.output_format }}"
+          QUALITY="${{ github.event.inputs.desired_quality }}"
+          OUT_DIR="${{ github.event.inputs.output_folder }}"
+          
+          mkdir -p "$OUT_DIR"
+          cd "$OUT_DIR"
+          
+          if [ "$FORMAT" = "mp4 (video)" ]; then
+            # دانلود ویدیو
+            if [ "$QUALITY" = "best" ]; then
+              yt-dlp -f "bestvideo+bestaudio" --merge-output-format mp4 -o "%(title)s_%(id)s.%(ext)s" "$URL"
+            else
+              yt-dlp -f "bestvideo[height<=${QUALITY%p}]+bestaudio" --merge-output-format mp4 -o "%(title)s_%(id)s.%(ext)s" "$URL"
+            fi
+          else
+            # دانلود فقط صدا
+            if [ "$QUALITY" = "best" ]; then
+              yt-dlp -f "bestaudio" --extract-audio --audio-format mp3 --audio-quality 0 -o "%(title)s_%(id)s.%(ext)s" "$URL"
+            else
+              BITRATE="${QUALITY%kbps}"
+              yt-dlp -f "bestaudio" --extract-audio --audio-format mp3 --audio-quality ${BITRATE} -o "%(title)s_%(id)s.%(ext)s" "$URL"
+            fi
+          fi
+          
+          # پیدا کردن فایل دانلود شده
+          FILE=$(ls -t *.mp4 *.mp3 2>/dev/null | head -1)
+          echo "filename=$FILE" >> $GITHUB_OUTPUT
+          echo "✅ دانلود شد: $FILE"
+          
+      - name: Split large file (if needed)
+        if: github.event.inputs.max_part_mb != '0'
+        run: |
+          OUT_DIR="${{ github.event.inputs.output_folder }}"
+          THRESH_MB="${{ github.event.inputs.max_part_mb }}"
+          THRESH_BYTES=$((THRESH_MB * 1024 * 1024))
+          
+          cd "$OUT_DIR"
+          for f in *.mp4 *.mp3 2>/dev/null; do
+            if [ -f "$f" ]; then
+              FS=$(stat -c%s "$f")
+              if [ "$FS" -gt "$THRESH_BYTES" ]; then
+                zip -s "${THRESH_MB}m" "${f}.zip" "$f"
+                rm "$f"
+                echo "✅ فایل به قطعات ${THRESH_MB}MB تقسیم شد: ${f}.zip"
+              fi
+            fi
+          done
+
+      - name: Push to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ github.event.inputs.output_folder }}/"
+          git commit -m "دانلود: ${{ github.event.inputs.video_url }}" || echo "Nothing to commit"
+          git push
