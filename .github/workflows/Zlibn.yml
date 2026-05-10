@@ -1,0 +1,97 @@
+name: Download Book Chapter
+
+on:
+  workflow_dispatch:
+    inputs:
+      isbn:
+        description: 'شابک (ISBN) کتاب (اختیاری)'
+        required: false
+        default: ''
+        type: string
+      book_title:
+        description: 'عنوان کتاب (اگر ISBN را وارد نکردید)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  download-and-commit:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.5.0
+        with:
+          python-version: '3.11'
+
+      - name: Install and Run Z-Library Downloader
+        env:
+          ISBN: ${{ github.event.inputs.isbn }}
+          BOOK_TITLE: ${{ github.event.inputs.book_title }}
+        run: |
+          pip install pyzlibrary
+
+          python -c "
+          import os
+          from pyzlibrary import PyZLibrary
+
+          # --- اطلاعات ورودی ---
+          isbn = os.environ.get('ISBN', '').strip()
+          title = os.environ.get('BOOK_TITLE', '').strip()
+          DOWNLOAD_DIR = 'download'
+
+          # --- آماده‌سازی جستجو ---
+          z = PyZLibrary()
+          search_query = isbn if isbn else title
+          
+          if not search_query:
+              print('خطا: یا ISBN یا عنوان کتاب را وارد کنید.')
+              exit(1)
+
+          print(f'جستجو برای: {search_query}')
+
+          try:
+              # --- جستجوی کتاب ---
+              results = z.search(query=search_query)
+              
+              if not results:
+                  print('هیچ کتابی با این مشخصات پیدا نشد.')
+                  exit(0)
+
+              print(f'تعداد {len(results)} نتیجه پیدا شد. در حال بررسی اولین نتیجه...')
+              
+              # --- انتخاب اولین نتیجه ---
+              book = results[0]
+              print(f'عنوان: {book.title}')
+              print(f'نویسنده: {book.author}')
+              print(f'سال: {book.year}')
+              print(f'شناسه کتاب: {book.id}')
+
+              # --- دانلود کتاب ---
+              print('در حال دانلود...')
+              os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+              
+              # کتابخانه pyzlibrary یک متد ساده برای دانلود دارد
+              success = z.download(book_id=book.id, dest_folder=DOWNLOAD_DIR)
+              
+              if success:
+                  print(f'کتاب با موفقیت دانلود و در پوشه {DOWNLOAD_DIR} ذخیره شد.')
+              else:
+                  print('دانلود ناموفق بود. خطای داخلی کتابخانه.')
+                  exit(1)
+
+          except Exception as e:
+              print(f'یک خطای غیرمنتظره رخ داد: {e}')
+              exit(1)
+          "
+
+      - name: Commit and push if new file
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add download/ || true
+          git diff --staged --quiet || git commit -m "دانلود کتاب با pyzlibrary"
+          git push
