@@ -1,0 +1,88 @@
+name: Download Book Chapter
+
+on:
+  workflow_dispatch:
+    inputs:
+      isbn:
+        description: 'شابک (ISBN) کتاب'
+        required: false
+        default: ''
+        type: string
+      book_title:
+        description: 'عنوان کتاب'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  download-and-commit:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.5.0
+        with:
+          python-version: '3.11'
+
+      - name: Install and Run LibGen Downloader
+        env:
+          ISBN: ${{ github.event.inputs.isbn }}
+          BOOK_TITLE: ${{ github.event.inputs.book_title }}
+        run: |
+          pip install pylibgen
+
+          python -c "
+          import os
+          from pylibgen import Library
+          
+          # یه شیء از کتابخونه LibGen می‌سازیم
+          l = Library()
+          DOWNLOAD_DIR = 'download'
+          os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+          isbn = os.environ.get('ISBN', '').strip()
+          title = os.environ.get('BOOK_TITLE', '').strip()
+
+          book_to_download = None
+
+          if isbn:
+              print(f'جستجو با ISBN: {isbn}')
+              # جستجو با ISBN
+              results = l.lookup(isbn=isbn)
+              if results:
+                  book_to_download = results[0]
+          elif title:
+              print(f'جستجو با عنوان: {title}')
+              # جستجو با عنوان
+              results = l.search(query=title, limit=1)
+              if results:
+                  book_to_download = results[0]
+          else:
+              print('خطا: ISBN یا عنوان کتاب را وارد کنید.')
+              exit(1)
+
+          if not book_to_download:
+              print('کتاب مورد نظر پیدا نشد.')
+              exit(0)
+
+          print(f'کتاب پیدا شد: {book_to_download.title} ({book_to_download.year})')
+          print(f'لینک دانلود: {book_to_download.md5}')
+
+          # دانلود با استفاده از هش MD5
+          if l.download(book_to_download.md5, dest_folder=DOWNLOAD_DIR):
+              print('دانلود با موفقیت انجام شد!')
+          else:
+              print('دانلود ناموفق بود. شاید لینک خراب یا فیلتر باشه.')
+              exit(1)
+          "
+
+      - name: Commit and push if new file
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add download/ || true
+          git diff --staged --quiet || git commit -m "تلاش برای دانلود کتاب با LibGen"
+          git push
